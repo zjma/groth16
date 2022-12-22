@@ -6,6 +6,7 @@ use super::{PreparedVerifyingKey, Proof, VerifyingKey};
 use ark_relations::r1cs::{Result as R1CSResult, SynthesisError};
 
 use core::ops::{AddAssign, Neg};
+use ark_serialize::CanonicalSerialize;
 
 /// Prepare the verifying key `vk` for use in proof verification.
 pub fn prepare_verifying_key<E: PairingEngine>(vk: &VerifyingKey<E>) -> PreparedVerifyingKey<E> {
@@ -43,11 +44,28 @@ pub fn verify_proof_with_prepared_inputs<E: PairingEngine>(
     proof: &Proof<E>,
     prepared_inputs: &E::G1Projective,
 ) -> R1CSResult<bool> {
+    let mut buf = vec![];
+    E::pairing(proof.a.clone(), proof.b.clone()).serialize(&mut buf);
+    println!("std.left={}", hex::encode(buf));
+
+    let mut buf = vec![];
+    E::pairing(proof.c.clone(), pvk.vk.delta_g2.clone()).serialize(&mut buf);
+    println!("std.right_3={}", hex::encode(buf));
+
+    let shit_affine = prepared_inputs.into_affine();
+    let mut buf = vec![];
+    shit_affine.serialize(&mut buf);
+    println!("std.shit={}", hex::encode(buf));
+
+    let mut buf = vec![];
+    E::pairing(shit_affine.clone(), pvk.vk.gamma_g2.clone()).serialize(&mut buf);
+    println!("std.right_2={}", hex::encode(buf));
+
     let qap = E::miller_loop(
         [
             (proof.a.into(), proof.b.into()),
             (
-                prepared_inputs.into_affine().into(),
+                shit_affine.into(),
                 pvk.gamma_g2_neg_pc.clone(),
             ),
             (proof.c.into(), pvk.delta_g2_neg_pc.clone()),
@@ -56,6 +74,10 @@ pub fn verify_proof_with_prepared_inputs<E: PairingEngine>(
     );
 
     let test = E::final_exponentiation(&qap).ok_or(SynthesisError::UnexpectedIdentity)?;
+
+    let mut buf = vec![];
+    pvk.alpha_g1_beta_g2.serialize(&mut buf);
+    println!("std.right_1={}", hex::encode(buf));
 
     Ok(test == pvk.alpha_g1_beta_g2)
 }

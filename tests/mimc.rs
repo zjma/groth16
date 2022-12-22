@@ -10,6 +10,7 @@
     unsafe_code
 )]
 
+use std::ops::{AddAssign, SubAssign};
 // For randomness (during paramgen and proof generation)
 use ark_std::rand::Rng;
 
@@ -18,8 +19,11 @@ use std::time::{Duration, Instant};
 
 // Bring in some tools for using pairing-friendly curves
 // We're going to use the BLS12-377 pairing-friendly elliptic curve.
-use ark_bls12_377::{Bls12_377, Fr};
-use ark_ff::Field;
+use ark_bls12_381::{Bls12_381, Fq12, Fr};
+use ark_ec::{PairingEngine, ProjectiveCurve};
+use ark_ec::AffineCurve;
+use ark_ec::group::Group;
+use ark_ff::{Field, Fp12, Zero};
 use ark_std::test_rng;
 
 // We'll use these interfaces to construct our circuit.
@@ -27,6 +31,7 @@ use ark_relations::{
     lc, ns,
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError, Variable},
 };
+use ark_serialize::CanonicalSerialize;
 
 const MIMC_ROUNDS: usize = 322;
 
@@ -166,8 +171,32 @@ fn test_mimc_gm_17() {
             constants: &constants,
         };
 
-        generate_random_parameters::<Bls12_377, _, _>(c, rng).unwrap()
+        generate_random_parameters::<Bls12_381, _, _>(c, rng).unwrap()
     };
+
+    for x in params.vk.gamma_abc_g1.iter() {
+        let mut buf = vec![];
+        x.serialize_uncompressed(&mut buf);
+        println!("gamma_abc_g1={}", hex::encode(buf));
+    }
+
+    let mut buf = vec![];
+    params.vk.alpha_g1.serialize_uncompressed(&mut buf);
+    println!("alpha_g1={}", hex::encode(buf));
+
+    let mut buf = vec![];
+    params.vk.beta_g2.serialize_uncompressed(&mut buf);
+    println!("beta_g2={}", hex::encode(buf));
+
+    let mut buf = vec![];
+    params.vk.gamma_g2.serialize_uncompressed(&mut buf);
+    println!("gamma_g2={}", hex::encode(buf));
+
+    let mut buf = vec![];
+    params.vk.delta_g2.serialize_uncompressed(&mut buf);
+    println!("delta_g2={}", hex::encode(buf));
+
+
 
     // Prepare the verification key (for proof verification)
     let pvk = prepare_verifying_key(&params.vk);
@@ -175,7 +204,7 @@ fn test_mimc_gm_17() {
     println!("Creating proofs...");
 
     // Let's benchmark stuff!
-    const SAMPLES: u32 = 50;
+    const SAMPLES: u32 = 1;
     let mut total_proving = Duration::new(0, 0);
     let mut total_verifying = Duration::new(0, 0);
 
@@ -187,8 +216,10 @@ fn test_mimc_gm_17() {
         // Generate a random preimage and compute the image
         let xl = rng.gen();
         let xr = rng.gen();
-        let image = mimc(xl, xr, &constants);
-
+        let image: Fr = mimc(xl, xr, &constants);
+        let mut buf = vec![];
+        image.serialize_uncompressed(&mut buf);
+        println!("image={}", hex::encode(buf));
         // proof_vec.truncate(0);
 
         let start = Instant::now();
@@ -203,9 +234,46 @@ fn test_mimc_gm_17() {
 
             // Create a groth16 proof with our parameters.
             let proof = create_random_proof(c, &params, rng).unwrap();
-            assert!(verify_proof(&pvk, &proof, &[image]).unwrap());
+            let mut buf = vec![];
+            proof.a.serialize_uncompressed(&mut buf);
+            println!("proof.a={}", hex::encode(buf));
+            let mut buf = vec![];
+            proof.b.serialize_uncompressed(&mut buf);
+            println!("proof.b={}", hex::encode(buf));
+            let mut buf = vec![];
+            proof.c.serialize_uncompressed(&mut buf);
+            println!("proof.c={}", hex::encode(buf));
 
-            // proof.write(&mut proof_vec).unwrap();
+            assert!(verify_proof(&pvk, &proof, &[image.clone()]).unwrap());
+
+            // Verifying manually using the original equation in groth16 paper.
+            let left = Bls12_381::pairing(proof.a.clone(), proof.b.clone());
+            let mut buf = vec![];
+            left.serialize(&mut buf);
+            println!("left={}", hex::encode(buf));
+
+            let right_1 = Bls12_381::pairing(params.vk.alpha_g1.clone(), params.vk.beta_g2.clone());
+            let mut buf = vec![];
+            right_1.serialize(&mut buf);
+            println!("right_1={}", hex::encode(buf));
+
+            let right_3 = Bls12_381::pairing(proof.c, params.vk.delta_g2.clone());
+            let mut buf = vec![];
+            right_3.serialize(&mut buf);
+            println!("right_3={}", hex::encode(buf));
+
+            let shit = (params.vk.gamma_abc_g1.get(0).unwrap().clone().into_projective() + params.vk.gamma_abc_g1.get(1).unwrap().clone().mul(image.clone())).into_affine();
+            let mut buf = vec![];
+            shit.serialize(&mut buf);
+            println!("shit={}", hex::encode(buf));
+
+            let right_2 = Bls12_381::pairing(shit, params.vk.gamma_g2.clone());
+            let mut buf = vec![];
+            right_2.serialize(&mut buf);
+            println!("right_2={}", hex::encode(buf));
+
+            let mut right: Fq12 = (right_1 + right_2 + right_3);
+            assert_eq!(left, right);
         }
 
         total_proving += start.elapsed();
