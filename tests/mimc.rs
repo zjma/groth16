@@ -272,7 +272,7 @@ fn test_mimc_gm_17() {
             right_2.serialize(&mut buf);
             println!("right_2={}", hex::encode(buf));
 
-            let mut right: Fq12 = (right_1 + right_2 + right_3);
+            let mut right = (right_1 * right_2 * right_3);
             assert_eq!(left, right);
         }
 
